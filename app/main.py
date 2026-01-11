@@ -1,5 +1,5 @@
 import cv2
-import numpy as np
+import csv
 from pose_utils import PoseEstimator, draw_pose, landmarks_to_np
 from rep_counter import angle_3pts, SmoothValue, RepCounter
 from feedback_rules import (
@@ -10,11 +10,7 @@ from feedback_rules import (
 )
 
 # Wybór ćwiczenia 
-EXERCISE = "biceps"   # albo "biceps"
-
-BICEPS_FEEDBACK_HOLD_FRAMES = 10 # Ile klatek trzymać komunikat
-bad_curl_counter = 0 # Ile kolejnych klatek ręka jest zginana niepoprawnie
-BICEPS_FEEDBACK_HOLD_FRAMES = 25   # ~1 sekunda przy 25 klatek
+EXERCISE = "squat"   # albo "biceps"
 BICEPS_RESET_ANGLE = 150           # ręka wyraźnie wyprostowana
 BICEPS_BAD_ANGLE = 70              # za małe zgięcie
 
@@ -28,7 +24,7 @@ R_HIP, R_KNEE, R_ANKLE = 24, 26, 28
 L_SHOULDER, L_ELBOW, L_WRIST = 11, 13, 15
 
 KNEE_TRACKER_ACTIVATION_ANGLE = 140 # Od jakiego kąta zaczynamy sprawdzać uciekanie kolan
-MIN_SQUAT_DEPTH_ANGLE = 135 # Minimalna głębokość przysiadu do oceny techniki
+MIN_SQUAT_DEPTH_ANGLE = 130 # Minimalna głębokość przysiadu do oceny techniki
 
 # Próg mówiący, czy jest już przysiad czy jeszcze pozycja stojąca
 STANCE_CHECK_ANGLE = 160
@@ -43,6 +39,14 @@ def put_text(frame, text, y, scale=0.7):
 
 
 def main():
+# Przygotowanie do zapisu raportu 
+    csv_file = open("training_log.csv", "w", newline="")
+    csv_writer = csv.writer(csv_file)
+    csv_writer.writerow([
+        "exercise", "reps", "state", "angle", "rpm", "feedback"
+    ])
+
+
     cap = cv2.VideoCapture(0) # Uruchomienie kamery
     pe = PoseEstimator() # Tworzymy obiekt do wykrywania pozy ciała
 
@@ -51,7 +55,7 @@ def main():
 
     # Bicep curl
     elbow_smoother = SmoothValue(window=3)
-    curl_counter = RepCounter(down_threshold=75, up_threshold=155)
+    curl_counter = RepCounter(down_threshold=120, up_threshold=155)
 
     knee_tracker = KneeValgusTracker()
     
@@ -60,6 +64,10 @@ def main():
     # 999.0, bo ta wartość startowa jest na pewno większa niż każdy prawdiwy kąt
     min_elbow_angle = 999.0  # Minimalny kąt łokcia w trakcie jednego ugięcia
     last_feedback = ""
+
+    # Przechowuje stan z poprzedniej klatki (UP / DOWN),
+    # i jest potrzebny do wykrycia momentu, w którym kończy się powtórzenie (DOWN -> UP)
+    last_state = None
 
     # Główna pętla
     while True:
@@ -142,10 +150,6 @@ def main():
                         msgs = [m for m in [fb1, fb2, fb3] if m]
                         last_feedback = " | ".join(set(msgs)) if msgs else "OK"
 
-                        # Reset przed następnym przysiadem
-                        min_angle_in_down = 999.0
-                        knee_tracker.reset()
-
                 put_text(frame, f"REPS: {reps}   STATE: {state}", 30)
                 put_text(frame, f"KNEE ANGLE: {knee_angle:.1f}", 60)
                 put_text(frame, f"RPM(30s): {rpm:.1f}", 90)
@@ -166,25 +170,9 @@ def main():
                 reps, state = curl_counter.update(elbow_angle)
                 rpm = curl_counter.rpm()
 
-                # Feedback techniki biceps curl 
-                # wykrycie błędnego ugięcia 
-                if elbow_angle > BICEPS_BAD_ANGLE:
-                    bad_curl_counter = BICEPS_FEEDBACK_HOLD_FRAMES
-                else:
-                    bad_curl_counter = max(0, bad_curl_counter - 1)
-
-                # reset tylko gdy ręka faktycznie wróciła do startu
-                if elbow_angle > BICEPS_RESET_ANGLE:
-                    bad_curl_counter = 0
-
-                # decyzja o komunikacie
-                if bad_curl_counter > 0:
-                    last_feedback = "Zegnij bardziej rękę"
-                elif elbow_angle < BICEPS_RESET_ANGLE:
-                    last_feedback = "OK"
-                else:
-                    last_feedback = ""
-
+                # Zapamiętujemy najmniejsze zgięcie łokcia w trakcie ugięcia
+                if state == "DOWN":
+                    min_elbow_angle = min(min_elbow_angle, elbow_angle)
 
                 state_label = "HANDS DOWN" if state == "UP" else "CURL"
                 put_text(frame, f"REPS: {reps}   STATE: {state_label}", 30)
@@ -194,10 +182,54 @@ def main():
             # Wspólne pole feedbacku
             shown_feedback = posture_feedback if posture_feedback else last_feedback
             put_text(frame, f"FEEDBACK: {shown_feedback}", 120, scale=0.6)
+            
+            # Wybór odpowiedniego kąta do analizy 
+            if EXERCISE == "squat":
+                angle_value = knee_angle
+            elif EXERCISE == "biceps":
+                angle_value = elbow_angle
+            else:
+                angle_value = None
+
+            # Zapis do csv tylko po zakończeniu powtórzenia 
+            if last_state == "DOWN" and state == "UP":
+
+                # wybór kąta do zapisu (minimalny z całego ruchu)
+                if EXERCISE == "squat":
+                    angle_to_save = min_angle_in_down 
+                    min_angle_in_down = 999.0   # Reset minimalnego kąta przed kolejnym przysiadem
+                    knee_tracker.reset() # Reset trackera uciekania kolan do środka (Valgus)
+
+                elif EXERCISE == "biceps":
+                    angle_to_save = min_elbow_angle
+
+                    # Ocena jakości ugięcia tylko po zakończeniu ruchu w górę
+                    if min_elbow_angle > BICEPS_BAD_ANGLE:
+                        last_feedback = "Zegnij bardziej rękę"
+                    else:
+                        last_feedback = "OK"
+
+                    min_elbow_angle = 999.0  # Reset minimalnego kąta łokcia przed kolejnym ugięciem
+
+                else:
+                    angle_to_save = None
+
+                csv_writer.writerow([
+                    EXERCISE,
+                    reps,
+                    state,
+                    round(angle_to_save, 1),
+                    round(rpm, 1),
+                    last_feedback
+                ])
+
+            # zapamiętujemy aktualny stan, żeby w następnej klatce
+            # móc wykryś ruch DOWN -> UP
+            last_state = state
 
         # Rysowanie szkieletu i okna
         frame = draw_pose(frame, result)
-        cv2.imshow("Workout Assistant - Squat MVP", frame)
+        cv2.imshow("Workout Assistant - MVP", frame)
 
         # Zamknięcie przez ESC
         if cv2.waitKey(1) & 0xFF == 27:
@@ -205,6 +237,7 @@ def main():
 
     cap.release()
     cv2.destroyAllWindows()
+    csv_file.close()
 
 
 if __name__ == "__main__":

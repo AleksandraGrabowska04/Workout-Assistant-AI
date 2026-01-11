@@ -9,8 +9,25 @@ from feedback_rules import (
     narrow_knees_feedback,  
 )
 
+# Funkcja wyboru ćwiczenia 
+def choose_exercise():
+    print("Wybierz ćwiczenie:")
+    print("1 - Przysiad (Squat)")
+    print("2 - Biceps Curl")
+
+    choice = input("Podaj numer ćwiczenia: ")
+
+    if choice == "1":
+        return "squat"
+    elif choice == "2":
+        return "biceps"
+    else:
+        print("Nieprawidłowy wybór, domyślnie: squat")
+        return "squat"
+
+
 # Wybór ćwiczenia 
-EXERCISE = "squat"   # albo "biceps"
+EXERCISE = choose_exercise()
 BICEPS_RESET_ANGLE = 150           # ręka wyraźnie wyprostowana
 BICEPS_BAD_ANGLE = 70              # za małe zgięcie
 

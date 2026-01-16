@@ -3,14 +3,18 @@ import numpy as np
 def squat_depth_feedback(min_knee_angle, target=110, tolerance=5):
     """
     Sprawdza, czy przysiad jest wystarczająco głęboki
-    na podstawie minimalnego kąta kolana
+    na podstawie minimalnego kąta kolana.
+
+    min_knee_angle -> najmniejszy kąt kolana w całym przysiadzie
+    target=110 -> docelowa głębokość (ok. kąt dla poprawnego przysiadu)
+    tolerance=5 -> tolerancja błędu
     """
     if min_knee_angle > (target - tolerance):
         return "Zejdź niżej"
     return None
 
 def thigh_inward_angle_feedback(hip, knee, max_angle_deg=20):
-    # Sprawdzenie, czy udo / kolano nie idzie za bardzo do środka
+    # Sprawdzenie, czy kolano nie idzie za bardzo do środka
     # max_angle_deg -> maksymalny dopuszczalny kąt uciekania kolana do środka
 
     # Rozpakowujemy współrzędne biodra i kolana
@@ -73,6 +77,12 @@ class KneeValgusTracker:
         self.min_ratio = min(self.min_ratio, ratio)
 
     def feedback(self, threshold=0.85):
+        """
+        threshold -> próg wykrycia koslawienia kolan
+        self.min_ratio to najmniejszy (najgorszy) stosunek pozycji kolana do pozycji kostki
+            liczony w trakcie całego przysiadu, klatka po klatce. 
+            Im mniejsza wartość, tym bardziej kolano ucieka do środka
+        """
         if self.min_ratio < threshold:
             return "Wypchnij kolana na zewnątrz"
         return None
